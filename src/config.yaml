@@ -1,0 +1,23 @@
+timezone: Asia/Tokyo
+# preview: 投稿文を保存 / post: Xへ自動投稿
+mode: preview
+ai:
+  provider: antigravity
+  timeoutSeconds: 180
+  tone: 親しみやすい自然な日本語。大げさにせず、記事を読んで気になった点を短く話す。
+news:
+  maxAgeHours: 72
+  rss:
+    # フード
+    - https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNREozWW0wU0FtcGhLQUFQAQ?hl=ja&gl=JP&ceid=JP%3Aja
+    # 世界
+    - https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtcGhHZ0pLVUNnQVAB?hl=ja&gl=JP&ceid=JP%3Aja
+    # 日本
+    - https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNRE5mTTJRU0FtcGhLQUFQAQ?hl=ja&gl=JP&ceid=JP%3Aja
+    # 科学＆テクノロジー
+    - https://news.google.com/rss/topics/CAAqKAgKIiJDQkFTRXdvSkwyMHZNR1ptZHpWbUVnSnFZUm9DU2xBb0FBUAE?hl=ja&gl=JP&ceid=JP%3Aja
+schedule:
+  news:
+    - id: lunch
+      between: ["12:00", "14:00"]
+      count: 1

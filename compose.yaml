@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    user: "${BOT_UID:-1000}:${BOT_GID:-1000}"
+    working_dir: /app
+    command: ["sh", "-c", "npm ci && npx playwright install chromium && exec npm start"]
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
+    environment:
+      TZ: Asia/Tokyo
+      DATA_DIR: /app/data
+      PLAYWRIGHT_BROWSERS_PATH: /app/data/ms-playwright
+      CODEX_HOME: /app/data/codex
+      HOME: /app/data/agy-home
+    volumes:
+      - ./src:/app
+      - type: bind
+        source: ${AGY_BIN:-${HOME}/.local/bin/agy}
+        target: /usr/local/bin/agy
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${AGY_AUTH_FILE:-${HOME}/.gemini/antigravity-cli/antigravity-oauth-token}
+        target: /app/data/agy-home/.gemini/antigravity-cli/antigravity-oauth-token
+        bind:
+          create_host_path: false
+    stop_grace_period: 7m

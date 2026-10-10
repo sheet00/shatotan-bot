@@ -1,0 +1,31 @@
+{
+  "name": "shatotan-bot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx start.ts",
+    "test": "tsx --test tests/news.test.ts tests/scheduler.test.ts",
+    "login": "tsx login.ts",
+    "post:test": "tsx tests/post-test.ts",
+    "check": "tsc --noEmit",
+    "test:log": "tsx tests/pw-log.test.ts",
+    "smoke": "tsx tests/smoke.ts"
+  },
+  "dependencies": {
+    "@mozilla/readability": "0.6.0",
+    "@openai/codex": "0.162.1",
+    "jsdom": "29.1.1",
+    "playwright": "1.64.0",
+    "rss-parser": "3.13.0",
+    "twitter-text": "3.1.0",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@types/jsdom": "30.0.0",
+    "@types/node": "24.19.2",
+    "@types/twitter-text": "3.1.10",
+    "@types/xml2js": "0.4.14",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
