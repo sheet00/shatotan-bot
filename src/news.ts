@@ -52,7 +52,7 @@ export async function readArticle(page: Page, link: string): Promise<{ title: st
   return { ...result, url };
 }
 
-export async function getNews(config: Config['news'], state: State): Promise<Article> {
+export async function getNews(config: Config['news'], state: State, excluded = new Set<string>()): Promise<Article> {
   const feedUrl = config.rss[randomInt(config.rss.length)];
   console.log(`RSS: ${feedUrl}`);
   const response = await fetch(feedUrl, { signal: AbortSignal.timeout(20_000) });
@@ -65,19 +65,22 @@ export async function getNews(config: Config['news'], state: State): Promise<Art
     if (!item.link) return false;
     try {
       const date = Date.parse(item.isoDate ?? item.pubDate ?? '');
-      return !state.hasPosted(normalizeUrl(item.link)) && Number.isFinite(date)
+      const url = normalizeUrl(item.link);
+      return !excluded.has(url) && !state.hasPosted(url) && Number.isFinite(date)
         && date <= now + 300_000 && date >= now - config.maxAgeHours * 3_600_000;
     } catch { return false; }
   });
   if (!candidates.length) throw new Error('対象期間内の未投稿記事がありません。');
   const item = candidates[randomInt(candidates.length)];
   const rssUrl = normalizeUrl(item.link!);
+  excluded.add(rssUrl);
   console.log(`選んだ記事: ${item.title}`);
   let browser: Browser | undefined;
   try {
     browser = await openBrowser(true);
     const page = await browser.newPage();
     const article = await readArticle(page, rssUrl);
+    if (excluded.has(article.url) && article.url !== rssUrl) throw new Error('リンク先の記事は今回すでに試した記事です。');
     if (state.hasPosted(article.url)) throw new Error('リンク先の記事は投稿済みです。');
     console.log(`本文確認: ${article.body.length}文字 / ${article.url}`);
     return { ...article, title: article.title || item.title || '', rssUrl, publishedAt: item.isoDate ?? item.pubDate! };
@@ -86,8 +89,24 @@ export async function getNews(config: Config['news'], state: State): Promise<Art
 
 export async function createNews(config: Config, state: State,
   dependencies: { getNews?: typeof getNews; generate?: typeof generate } = {}) {
-  const article = await (dependencies.getNews ?? getNews)(config.news, state);
-  const text = await (dependencies.generate ?? generate)(article, config.ai);
+  const excluded = new Set<string>();
+  let draft: { article: Article; text: string } | undefined;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const article = await (dependencies.getNews ?? getNews)(config.news, state, excluded);
+      excluded.add(article.rssUrl);
+      excluded.add(article.url);
+      const text = await (dependencies.generate ?? generate)(article, config.ai);
+      draft = { article, text };
+      break;
+    } catch (error) {
+      lastError = error;
+      console.warn(`ニュース作成失敗 (${attempt}/5): ${error instanceof Error ? error.message : String(error)}${attempt < 5 ? ' 別のニュースを選びます。' : ''}`);
+    }
+  }
+  if (!draft) throw new Error('5回試しましたがニュース投稿文を作成できませんでした。', { cause: lastError });
+  const { article, text } = draft;
   const directory = join(dataDir, 'drafts');
   await mkdir(directory, { recursive: true });
   const path = join(directory, `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}.json`);

@@ -9,7 +9,7 @@ import { japanDate, planDay, tick } from '../scheduler.js';
 
 const config: Config = {
   timezone: 'Asia/Tokyo', mode: 'preview',
-  ai: { provider: 'codex', timeoutSeconds: 10, tone: '自然な日本語' },
+  ai: { provider: 'codex', timeoutSeconds: 10 },
   news: { rss: ['https://example.com/rss'], maxAgeHours: 72 },
   schedule: { news: [{ id: 'lunch', between: ['12:00', '14:00'], count: 1 }] },
 };

@@ -4,7 +4,6 @@ mode: preview
 ai:
   provider: antigravity
   timeoutSeconds: 180
-  tone: 親しみやすい自然な日本語。大げさにせず、記事を読んで気になった点を短く話す。
 news:
   maxAgeHours: 72
   rss:

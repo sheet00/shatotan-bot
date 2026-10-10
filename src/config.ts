@@ -5,7 +5,7 @@ export interface WindowConfig { id: string; between: [string, string]; count: 1 
 export interface Config {
   timezone: 'Asia/Tokyo';
   mode: 'preview' | 'post';
-  ai: { provider: 'codex' | 'antigravity'; command?: string; timeoutSeconds: number; tone: string };
+  ai: { provider: 'codex' | 'antigravity'; command?: string; timeoutSeconds: number };
   news: { rss: string[]; maxAgeHours: number };
   schedule: { news: WindowConfig[] };
 }
@@ -21,7 +21,6 @@ export function validateConfig(value: unknown): Config {
   if (!c || c.timezone !== 'Asia/Tokyo') throw new Error('timezone は Asia/Tokyo を指定してください。');
   if (!['preview', 'post'].includes(c.mode)) throw new Error('mode は preview / post を指定してください。');
   if (!c.ai || !['codex', 'antigravity'].includes(c.ai.provider)
-    || typeof c.ai.tone !== 'string' || !c.ai.tone.trim()
     || !Number.isFinite(c.ai.timeoutSeconds) || c.ai.timeoutSeconds < 1 || c.ai.timeoutSeconds > 300
     || (c.ai.command !== undefined && (typeof c.ai.command !== 'string' || !c.ai.command.trim()))) {
     throw new Error('ai 設定が不正です。timeoutSeconds は1〜300秒です。');

@@ -25,8 +25,10 @@ test('記事本文を抽出し、ナビゲーションだけ・有料記事は�
   assert.throws(() => extractBody(`<script type="application/ld+json">{"isAccessibleForFree":false}</script><article><p>${article.body}</p></article>`, article.url));
 });
 
-test('感想の根拠とXの文字数を確認し、URLはBOTが付ける', () => {
-  assert.ok(validateDraft(reply, article).endsWith(`\n${article.url}`));
+test('感想・記事タイトル・URLの順で組み立て、根拠と全体の文字数を確認する', () => {
+  assert.equal(validateDraft(reply, article), `${JSON.parse(reply).comment}\n[${article.title}]\n${article.url}`);
+  assert.throws(() => validateDraft(reply, { ...article, title: ' ' }), /記事タイトル/);
+  assert.throws(() => validateDraft(reply, { ...article, title: '長'.repeat(150) }), /文字数制限/);
   assert.throws(() => validateDraft(JSON.stringify({ comment: 'すごい', evidence: '記事にない架空の話を書きました。' }), article));
   assert.throws(() => validateDraft(JSON.stringify({ comment: '長'.repeat(150), evidence: paragraph }), article));
   assert.throws(() => validateDraft(JSON.stringify({ comment: 'https://wrong.example/', evidence: paragraph }), article));
@@ -38,7 +40,7 @@ test('CLIへ本文をstdinで渡して最終出力を取得し、失敗・タイ
   const command = join(dir, 'fake-cli.cjs');
   try {
     await writeFile(command, `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(!input.includes(${JSON.stringify(paragraph)}))process.exit(2);fs.writeFileSync(process.argv[process.argv.indexOf('-o')+1],${JSON.stringify(reply)});});`, { mode: 0o700 });
-    const config: Config['ai'] = { provider: 'codex', command, timeoutSeconds: 5, tone: '自然な日本語' };
+    const config: Config['ai'] = { provider: 'codex', command, timeoutSeconds: 5 };
     assert.ok((await generate(article, config)).includes(article.url));
     await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const event=JSON.parse(input);if(event.event!=='user'||!event.message.content.includes(${JSON.stringify(paragraph)}))process.exit(2);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
     assert.ok((await generate(article, { ...config, provider: 'antigravity' })).includes(article.url));
@@ -55,7 +57,7 @@ test('生成結果を保存しても投稿済みにしない。投稿成功時�
   const state = new State(':memory:');
   let draftPath: string | undefined;
   try {
-    const config = { ai: { provider: 'codex', timeoutSeconds: 5, tone: '自然な日本語' }, news: { rss: [article.rssUrl], maxAgeHours: 72 } } as Config;
+    const config = { ai: { provider: 'codex', timeoutSeconds: 5 }, news: { rss: [article.rssUrl], maxAgeHours: 72 } } as Config;
     const draft = await createNews(config, state, { getNews: async () => article, generate: async () => validateDraft(reply, article) });
     draftPath = draft.path;
     assert.equal(JSON.parse(await readFile(draft.path, 'utf8')).article.body, article.body);
@@ -64,6 +66,46 @@ test('生成結果を保存しても投稿済みにしない。投稿成功時�
     assert.equal(state.hasPosted(article.url), true);
     assert.equal(state.hasPosted(article.rssUrl), true);
   } finally { state.close(); if (draftPath) await rm(draftPath, { force: true }); }
+});
+
+test('本文取得・生成の失敗後は別の記事を選び、未投稿のまま保存する', async () => {
+  const state = new State(':memory:');
+  let path: string | undefined;
+  let calls = 0;
+  const second = { ...article, url: 'https://example.com/second', rssUrl: 'https://example.com/rss-second' };
+  try {
+    const config = { news: {}, ai: {} } as Config;
+    const result = await createNews(config, state, {
+      getNews: async (_config, _state, excluded) => {
+        calls++;
+        if (calls === 1) throw new Error('本文取得失敗');
+        if (calls === 2) return article;
+        assert.ok(excluded?.has(article.url));
+        assert.ok(excluded?.has(article.rssUrl));
+        return second;
+      },
+      generate: async selected => {
+        if (selected.url === article.url) throw new Error('文字数制限');
+        return validateDraft(reply, selected);
+      },
+    });
+    path = result.path;
+    assert.equal(calls, 3);
+    assert.equal(result.article.url, second.url);
+    assert.equal(state.hasPosted(second.url), false);
+  } finally { state.close(); if (path) await rm(path, { force: true }); }
+});
+
+test('ニュース作成の再試行は5回で止まる', async () => {
+  const state = new State(':memory:');
+  let calls = 0;
+  try {
+    await assert.rejects(createNews({ news: {}, ai: {} } as Config, state, {
+      getNews: async () => { calls++; throw new Error('取得失敗'); },
+      generate: async () => { assert.fail('記事がないので生成しない'); },
+    }), /5回/);
+    assert.equal(calls, 5);
+  } finally { state.close(); }
 });
 
 test('--news はRSS・本文取得・CLI生成まで実行し、mode: post でも送信しない', async () => {
@@ -84,7 +126,7 @@ test('--news はRSS・本文取得・CLI生成まで実行し、mode: post で�
     // RSS config uses HTTPS in production. A local HTTP fixture is reached through an injected fetch shim.
     const command = join(dir, 'fake-agy.cjs');
     await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const e=JSON.parse(input);if(!e.message.content.includes(${JSON.stringify(paragraph)}))process.exit(2);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
-    const config: Config = { timezone: 'Asia/Tokyo', mode: 'post', ai: { provider: 'antigravity', command, timeoutSeconds: 5, tone: '自然な日本語' }, news: { rss: ['https://fixture.invalid/rss'], maxAgeHours: 72 }, schedule: { news: [] } };
+    const config: Config = { timezone: 'Asia/Tokyo', mode: 'post', ai: { provider: 'antigravity', command, timeoutSeconds: 5 }, news: { rss: ['https://fixture.invalid/rss'], maxAgeHours: 72 }, schedule: { news: [] } };
     const configPath = join(dir, 'config.yaml');
     await writeFile(configPath, stringify(config));
     const shim = join(dir, 'fetch-shim.mjs');
