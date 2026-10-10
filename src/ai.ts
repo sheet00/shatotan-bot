@@ -14,6 +14,19 @@ export interface Article {
   body: string;
 }
 
+export interface WeatherInfo {
+  url: string;
+  comment: string;
+  area: string;
+  dateText: string;
+  weather: string;
+  maxTemp: number;
+  minTemp: number;
+  probPrecip: number;
+  wind?: string;
+  announceDatetime?: string;
+}
+
 export async function promptFor(
   article: Article,
 ): Promise<string> {
@@ -34,6 +47,36 @@ export async function promptFor(
     /\{\{(article|commentLimit)\}\}/g,
     (_, key: keyof typeof values) => values[key],
   );
+}
+
+export async function promptForWeather(
+  weather: WeatherInfo,
+): Promise<string> {
+  const templates = await Promise.all([
+    readFile(new URL("./prompts/system.md", import.meta.url), "utf8"),
+    readFile(new URL("./prompts/weather.md", import.meta.url), "utf8"),
+  ]);
+  const template = templates.map((text) => text.trim()).join("\n\n");
+  const commentLimit = "280";
+  const weatherData = JSON.stringify(
+    {
+      targetArea: weather.area,
+      targetDate: weather.dateText,
+      forecast: {
+        weather: weather.weather,
+        maxTemp: `${weather.maxTemp}℃`,
+        minTemp: `${weather.minTemp}℃`,
+        probPrecip: `${weather.probPrecip}%`,
+        wind: weather.wind,
+      },
+      overview: weather.comment,
+    },
+    null,
+    2,
+  );
+  return template
+    .replace(/\{\{commentLimit\}\}/g, commentLimit)
+    .replace(/\{\{weatherData\}\}/g, weatherData);
 }
 
 export function validateDraft(raw: string, article: Article): string {
@@ -64,11 +107,39 @@ export function validateDraft(raw: string, article: Article): string {
   return text;
 }
 
-export async function generate(
-  article: Article,
+export function validateWeatherDraft(raw: string, weather: WeatherInfo): string {
+  const parsed = JSON.parse(
+    raw
+      .replace(/^```(?:json)?\s*\n?/, "")
+      .replace(/\n?```\s*$/, "")
+      .trim(),
+  );
+  let comment = parsed.comment;
+  if (typeof comment === "string" && comment.trim().startsWith("{")) {
+    try {
+      const inner = JSON.parse(comment);
+      if (typeof inner.comment === "string") comment = inner.comment;
+    } catch {}
+  }
+  if (typeof comment !== "string" || !comment.trim()) {
+    throw new Error("生成文の形式を確認できません。");
+  }
+  comment = comment.trim();
+  if (/https?:\/\/|www\.|[@＠]/i.test(comment)) {
+    throw new Error("発言に不要なURLやメンションが含まれています。");
+  }
+  const text = comment;
+  if (!twitterText.parseTweet(text).valid) {
+    throw new Error("生成文がXの文字数制限を超えるか、不正な文字を含んでいます。");
+  }
+  return text;
+}
+
+async function runAiCli(
+  prompt: string,
+  schema: object | null,
   config: Config["ai"],
 ): Promise<string> {
-  const prompt = await promptFor(article);
   const cwd = await mkdtemp(join(tmpdir(), "shatotan-ai-"));
   const output = join(cwd, "result.json");
   const codexHome = resolve(process.env.CODEX_HOME ?? join(dataDir, "codex"));
@@ -97,16 +168,7 @@ export async function generate(
           "--disable-slash-commands",
           "--print-timeout",
           `${config.timeoutSeconds}s`,
-          "--json-schema",
-          JSON.stringify({
-            type: "object",
-            properties: {
-              comment: { type: "string" },
-              evidence: { type: "string", minLength: 12 },
-            },
-            required: ["comment", "evidence"],
-            additionalProperties: false,
-          }),
+          ...(schema ? ["--json-schema", JSON.stringify(schema)] : []),
         ];
   try {
     const raw = await new Promise<string>((resolveOutput, reject) => {
@@ -171,7 +233,7 @@ export async function generate(
       );
     });
     if (config.provider === "codex")
-      return validateDraft(await readFile(output, "utf8"), article);
+      return await readFile(output, "utf8");
     const events = raw
       .trim()
       .split("\n")
@@ -183,13 +245,45 @@ export async function generate(
     if (!envelope) throw new Error("Antigravityの最終生成結果がありません。");
     if (envelope.status !== "SUCCESS")
       throw new Error("Antigravityが正常な生成結果を返しませんでした。");
-    return validateDraft(
-      envelope.structured_output
-        ? JSON.stringify(envelope.structured_output)
-        : envelope.response,
-      article,
-    );
+    return envelope.structured_output
+      ? JSON.stringify(envelope.structured_output)
+      : envelope.response;
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
+}
+
+export async function generate(
+  article: Article,
+  config: Config["ai"],
+): Promise<string> {
+  const prompt = await promptFor(article);
+  const schema = {
+    type: "object",
+    properties: {
+      comment: { type: "string" },
+      evidence: { type: "string", minLength: 12 },
+    },
+    required: ["comment", "evidence"],
+    additionalProperties: false,
+  };
+  const raw = await runAiCli(prompt, schema, config);
+  return validateDraft(raw, article);
+}
+
+export async function generateWeather(
+  weather: WeatherInfo,
+  config: Config["ai"],
+): Promise<string> {
+  const prompt = await promptForWeather(weather);
+  const schema = {
+    type: "object",
+    properties: {
+      comment: { type: "string" },
+    },
+    required: ["comment"],
+    additionalProperties: false,
+  };
+  const raw = await runAiCli(prompt, schema, config);
+  return validateWeatherDraft(raw, weather);
 }

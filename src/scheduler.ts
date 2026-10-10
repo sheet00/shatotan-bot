@@ -4,11 +4,15 @@ import { type Plan, State } from './state.js';
 
 export function japanDate(now: number): string { return new Date(now + 9 * 3_600_000).toISOString().slice(0, 10); }
 
+export function allWindows(config: Config) {
+  return [...config.schedule.news, ...(config.schedule.weather ?? [])];
+}
+
 export function planDay(state: State, config: Config, now = Date.now(), pick = randomInt) {
   const date = japanDate(now);
   const midnight = Date.parse(`${date}T00:00:00+09:00`);
   const existing = new Set(state.plans(date).map(p => p.window_id));
-  for (const window of config.schedule.news) {
+  for (const window of allWindows(config)) {
     if (existing.has(window.id)) continue;
     const starts = midnight + minutes(window.between[0]) * 60_000;
     const ends = midnight + minutes(window.between[1]) * 60_000;
@@ -22,7 +26,7 @@ export function planDay(state: State, config: Config, now = Date.now(), pick = r
 export async function tick(state: State, config: Config, run: (plan: Plan) => Promise<string>, now = Date.now()) {
   state.expire(now);
   planDay(state, config, now);
-  const activeIds = new Set(config.schedule.news.map(w => w.id));
+  const activeIds = new Set(allWindows(config).map(w => w.id));
   for (const plan of state.plans(japanDate(now))) {
     if (!activeIds.has(plan.window_id) || plan.status !== 'pending' || plan.scheduled_at > now) continue;
     if (!state.acquire(now)) return;

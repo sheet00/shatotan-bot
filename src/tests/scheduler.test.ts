@@ -91,8 +91,34 @@ test('不正時刻・重複枠・countの誤設定を起動前に拒否する', 
   assert.deepEqual(validateConfig(config), config);
   for (const schedule of [
     [{ id: 'a', between: ['24:00', '25:00'], count: 1 }],
+    [{ id: 'a', between: ['23:00', '24:01'], count: 1 }],
+    [{ id: 'a', between: ['24:00', '24:00'], count: 1 }],
     [{ id: 'a', between: ['14:00', '12:00'], count: 1 }],
     [{ id: 'a', between: ['12:00', '14:00'], count: 2 }],
     [{ id: 'a', between: ['12:00', '14:00'], count: 1 }, { id: 'b', between: ['13:00', '15:00'], count: 1 }],
   ]) assert.throws(() => validateConfig({ ...config, schedule: { news: schedule } }));
+});
+
+test('9時から翌1時の16枠を抽選し、23時枠と翌0時枠をそれぞれ1回実行する', async () => {
+  const hours = [...Array.from({ length: 15 }, (_, index) => index + 9), 0];
+  const hourly = validateConfig({ ...config, schedule: { news: hours.map(hour => ({
+    id: `news_${String(hour).padStart(2, '0')}`,
+    between: [`${String(hour).padStart(2, '0')}:00`, `${String(hour + 1).padStart(2, '0')}:00`], count: 1,
+  })) } });
+  const state = new State(':memory:');
+  try {
+    planDay(state, hourly, at('00:00'), () => 37);
+    const plans = state.plans('2026-10-10');
+    assert.equal(plans.length, 16);
+    const late = plans.find(plan => plan.window_id === 'news_23')!;
+    assert.equal(late.scheduled_at, at('23:37'));
+    assert.equal(late.ends_at, at('00:00') + 86_400_000);
+    const executed: string[] = [];
+    const run = async (plan: { date: string; window_id: string }) => { executed.push(`${plan.date}/${plan.window_id}`); return 'test'; };
+    await tick(state, hourly, run, at('23:37'));
+    planDay(state, hourly, at('00:00') + 86_400_000, () => 37);
+    await tick(state, hourly, run, at('00:37') + 86_400_000);
+    await tick(state, hourly, run, at('00:38') + 86_400_000);
+    assert.deepEqual(executed, ['2026-10-10/news_23', '2026-10-11/news_00']);
+  } finally { state.close(); }
 });

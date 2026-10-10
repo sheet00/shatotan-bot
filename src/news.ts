@@ -2,13 +2,12 @@ import Parser from 'rss-parser';
 import { JSDOM } from 'jsdom';
 import { Readability, isProbablyReaderable } from '@mozilla/readability';
 import { randomInt } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { Browser, Page } from 'playwright';
-import { dataDir, openBrowser } from './browser.js';
+import { openBrowser } from './browser.js';
 import { generate, type Article } from './ai.js';
 import type { Config } from './config.js';
 import { State } from './state.js';
+import { saveDraft } from './draft.js';
 
 export function normalizeUrl(value: string): string {
   const url = new URL(value);
@@ -107,11 +106,7 @@ export async function createNews(config: Config, state: State,
   }
   if (!draft) throw new Error('5回試しましたがニュース投稿文を作成できませんでした。', { cause: lastError });
   const { article, text } = draft;
-  const directory = join(dataDir, 'drafts');
-  await mkdir(directory, { recursive: true });
-  const path = join(directory, `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}.json`);
-  // Persist provenance and text for inspection, without registering a successful post.
-  await writeFile(path, JSON.stringify({ createdAt: new Date().toISOString(), article, text }, null, 2), { mode: 0o600 });
+  const path = await saveDraft('news', { article, text });
   console.log(`\n${text}\n\n生成結果: ${path}`);
   return { article, text, path };
 }

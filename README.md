@@ -1,10 +1,11 @@
 # shatotanBOT
 
 GoogleニュースのRSSからランダムに記事を選び、本文を読んだ感想と記事URLをXへ投稿するBOT。
+また、tenki.jpから東京都の明日の天気概況と予報を取得し、親しみやすいコメントと準備のヒントをXへ投稿する。
 Docker内で常駐し、指定した時間帯の中で毎日実行時刻を抽選する。外部cronは不要。
 
-現在はニュースの取得・本文確認・AIによる感想生成・定期実行・X投稿に対応する。
-初期設定は **preview（生成のみ）**。天気投稿は今後の実装対象。
+現在はニュースおよび天気の取得・AIによる投稿文生成・定期実行・X投稿に対応する。
+現在の設定は **post（自動投稿）**。毎日9:00〜翌1:00の間、1時間ごとにランダムな時刻で1回投稿する。
 
 ## 起動
 
@@ -39,20 +40,25 @@ BOT_GID=1000
 
 実際の値はホストで `id -u`、`id -g` を確認する。実行ユーザーやマウント設定の変更は `docker compose up -d --build` で反映する。
 
-## ニュース生成を試す
+## 投稿文生成を試す
 
 ```bash
+# ニュース生成を試す
 docker compose exec -T bot npm start -- --news
+
+# 天気予報生成を試す
+docker compose exec -T bot npm start -- --weather
 ```
 
-ニュースを1件選び、本文に基づく感想とURLを画面に表示して `src/data/drafts/` に保存する。
-`--news` は `mode: post` でもXへ投稿しない。定期実行の枠や投稿済みURLも消費しない。
+`--news` または `--weather` を指定すると、投稿文を1回生成して画面に表示し、`src/data/drafts/` に保存する。
+どちらのオプションも `mode: post` でもXへ投稿しない。定期実行の枠や投稿済み履歴も消費しない。
 失敗時は理由を記録し、終了コード1で終了する。
 
 | コマンド（コンテナ内）                          | 動作                                                     |
 | ----------------------------------------------- | -------------------------------------------------------- |
 | `npm start`                                     | 内部スケジューラーを常駐起動                             |
 | `npm start -- --news`                           | ニュース投稿文を1回生成して終了                          |
+| `npm start -- --weather`                        | 天気投稿文を1回生成して終了                              |
 | `npm start -- --show-schedule`                  | 今日の抽選時刻・実行状態を表示。未抽選の枠は抽選して保存 |
 | `npm start -- --help`                           | 起動オプションを表示                                     |
 | `npm start -- --news --config /app/config.yaml` | 指定した設定で1回生成                                    |
@@ -110,7 +116,7 @@ docker compose restart bot
 
 ```yaml
 timezone: Asia/Tokyo
-mode: preview
+mode: post
 ai:
   provider: antigravity
   timeoutSeconds: 180
@@ -125,10 +131,57 @@ news:
     - https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNRE5mTTJRU0FtcGhLQUFQAQ?hl=ja&gl=JP&ceid=JP%3Aja
     # 科学＆テクノロジー
     - https://news.google.com/rss/topics/CAAqKAgKIiJDQkFTRXdvSkwyMHZNR1ptZHpWbUVnSnFZUm9DU2xBb0FBUAE?hl=ja&gl=JP&ceid=JP%3Aja
+weather:
+  url: https://tenki.jp/forecast/3/
 schedule:
   news:
-    - id: lunch
-      between: ["12:00", "14:00"]
+    - id: news_09
+      between: ["09:00", "10:00"]
+      count: 1
+    - id: news_10
+      between: ["10:00", "11:00"]
+      count: 1
+    - id: news_11
+      between: ["11:00", "12:00"]
+      count: 1
+    - id: news_12
+      between: ["12:00", "13:00"]
+      count: 1
+    - id: news_13
+      between: ["13:00", "14:00"]
+      count: 1
+    - id: news_14
+      between: ["14:00", "15:00"]
+      count: 1
+    - id: news_15
+      between: ["15:00", "16:00"]
+      count: 1
+    - id: news_16
+      between: ["16:00", "17:00"]
+      count: 1
+    - id: news_17
+      between: ["17:00", "18:00"]
+      count: 1
+    - id: news_18
+      between: ["18:00", "19:00"]
+      count: 1
+    - id: news_19
+      between: ["19:00", "20:00"]
+      count: 1
+    - id: news_20
+      between: ["20:00", "21:00"]
+      count: 1
+    - id: news_21
+      between: ["21:00", "22:00"]
+      count: 1
+    - id: news_22
+      between: ["22:00", "23:00"]
+      count: 1
+    - id: news_23
+      between: ["23:00", "24:00"]
+      count: 1
+    - id: news_00
+      between: ["00:00", "01:00"]
       count: 1
 ```
 
@@ -139,8 +192,10 @@ RSSグループの初期登録は「フード」「世界」「日本」「科�
 
 ### ランダム時刻で各時間帯に1回実行
 
-上の設定なら、毎日12:00〜14:00の間に1回実行する。今日は12:37、明日は13:18というように時刻が変わる。
-複数回実行する場合は時間帯を追加する。
+上の設定では、9:00〜翌1:00を16個の1時間枠に分け、各枠で1回実行する。全枠で成功した場合は16件投稿する。
+たとえば9:37、10:18、11:52のように枠ごとに抽選するため、投稿間隔は厳密な60分ではない。1:00〜9:00は実行しない。
+23:00〜24:00と00:00〜01:00を別枠にして日付をまたぐ。0時枠の実行履歴は、その時点の暦日に保存する。
+別の時間帯を使う設定例：
 
 ```yaml
 schedule:
@@ -157,7 +212,7 @@ schedule:
 ```
 
 - 日本時間を使い、開始時刻以上・終了時刻未満から1分単位で抽選する。予定の確認間隔は15秒。
-- 現在は `count: 1` に対応する。時間帯は同日内で、互いに重ならないよう指定する。
+- 現在は `count: 1` に対応する。時間帯は同日内で、互いに重ならないよう指定する。終了時刻には `24:00` を指定でき、日跨ぎは24時で枠を分割する。
 - 各枠の `id` は一意にする。同じ日・同じidの抽選結果はSQLiteに保存し、再起動しても引き直さない。
 - 保存済みの予定は時刻設定を変更しても維持する。同日の再実行目的でidを変更しない。
 - 枠の途中で初めて起動した場合は残り時間から抽選する。停止中に実行時刻を過ぎた予定は見送る。
@@ -202,7 +257,7 @@ BOTは標準入力に1件のJSONメッセージを渡し、Antigravityの最終�
 | パス                      | 内容                                                           |
 | ------------------------- | -------------------------------------------------------------- |
 | `src/data/bot.sqlite`     | 抽選時刻・実行状態・投稿済みURL・実行ロック                    |
-| `src/data/drafts/`        | 記事本文・参照URL・生成した投稿文                              |
+| `src/data/drafts/`        | 記事・天気データ、参照URL、生成した投稿文（`yyyy-mm-dd-hhmmss-category.json`） |
 | `src/data/x-auth.json`    | Xのログイン状態                                                |
 | `src/data/errors.log`     | 手動起動などのエラー。定期処理の失敗はSQLiteとDockerログに記録 |
 | `src/data/log/`           | ブラウザの解析ログ                                             |

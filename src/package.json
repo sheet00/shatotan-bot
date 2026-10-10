@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx start.ts",
-    "test": "tsx --test tests/news.test.ts tests/scheduler.test.ts",
+    "test": "tsx --test tests/news.test.ts tests/scheduler.test.ts tests/weather.test.ts tests/draft.test.ts",
     "login": "tsx login.ts",
     "post:test": "tsx tests/post-test.ts",
     "check": "tsc --noEmit",

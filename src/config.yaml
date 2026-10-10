@@ -1,22 +1,78 @@
 timezone: Asia/Tokyo
 # preview: 投稿文を保存 / post: Xへ自動投稿
-mode: preview
+mode: post
 ai:
   provider: antigravity
   timeoutSeconds: 180
 news:
   maxAgeHours: 72
   rss:
+    # Qiita トレンド
+    - https://qiita.com/popular-items/feed
+    # Zenn トレンド
+    - https://zenn.dev/feed
     # フード
     - https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNREozWW0wU0FtcGhLQUFQAQ?hl=ja&gl=JP&ceid=JP%3Aja
     # 世界
-    - https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtcGhHZ0pLVUNnQVAB?hl=ja&gl=JP&ceid=JP%3Aja
+    # - https://news.google.com/rss/topics/CAAqJggKIiBDQkFTRWdvSUwyMHZNRGx1YlY4U0FtcGhHZ0pLVUNnQVAB?hl=ja&gl=JP&ceid=JP%3Aja
     # 日本
     - https://news.google.com/rss/topics/CAAqIQgKIhtDQkFTRGdvSUwyMHZNRE5mTTJRU0FtcGhLQUFQAQ?hl=ja&gl=JP&ceid=JP%3Aja
     # 科学＆テクノロジー
     - https://news.google.com/rss/topics/CAAqKAgKIiJDQkFTRXdvSkwyMHZNR1ptZHpWbUVnSnFZUm9DU2xBb0FBUAE?hl=ja&gl=JP&ceid=JP%3Aja
+weather:
+  url: https://tenki.jp/forecast/3/
 schedule:
   news:
-    - id: lunch
-      between: ["12:00", "14:00"]
+    - id: news_09
+      between: ["09:00", "10:00"]
       count: 1
+    - id: news_10
+      between: ["10:00", "11:00"]
+      count: 1
+    - id: news_11
+      between: ["11:00", "12:00"]
+      count: 1
+    - id: news_12
+      between: ["12:00", "13:00"]
+      count: 1
+    - id: news_13
+      between: ["13:00", "14:00"]
+      count: 1
+    - id: news_14
+      between: ["14:00", "15:00"]
+      count: 1
+    - id: news_15
+      between: ["15:00", "16:00"]
+      count: 1
+    - id: news_16
+      between: ["16:00", "17:00"]
+      count: 1
+    - id: news_17
+      between: ["17:00", "18:00"]
+      count: 1
+    - id: news_18
+      between: ["18:00", "19:00"]
+      count: 1
+    - id: news_19
+      between: ["19:00", "20:00"]
+      count: 1
+    - id: news_20
+      between: ["20:00", "21:00"]
+      count: 1
+    - id: news_21
+      between: ["21:00", "22:00"]
+      count: 1
+    - id: news_22
+      between: ["22:00", "23:00"]
+      count: 1
+    - id: news_23
+      between: ["23:00", "24:00"]
+      count: 1
+    - id: news_00
+      between: ["00:00", "01:00"]
+      count: 1
+  weather:
+    - id: weather_21
+      between: ["21:00", "22:00"]
+      count: 1
+
