@@ -6,14 +6,23 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { stringify } from 'yaml';
-import { generate, validateDraft, type Article } from '../ai.js';
-import { extractBody, normalizeUrl, createNews } from '../news.js';
+import { generate, validateDraft, validateSelection, selectNews, type Article, type NewsCandidate } from '../ai.js';
+import { extractBody, normalizeUrl, createNews, getNewsCandidates } from '../news.js';
 import { State } from '../state.js';
 import type { Config } from '../config.js';
 
 const paragraph = '街の食堂が来週から旬の野菜を使った定食を提供する。地元の農家と協力して、毎日届く野菜に合わせて献立を変える。価格は千円で、昼の時間帯に数量限定で販売する。';
 const article: Article = { title: '食堂の新しい定食', url: 'https://example.com/article', rssUrl: 'https://news.google.com/rss/articles/example', publishedAt: new Date().toISOString(), body: paragraph.repeat(5) };
 const reply = JSON.stringify({ comment: '届く野菜で献立が変わるのが面白い。季節ごとにどんな定食になるのか気になる。', evidence: '地元の農家と協力して、毎日届く野菜に合わせて献立を変える。' });
+
+const candidates: NewsCandidate[] = Array.from({ length: 10 }, (_, index) => ({
+  id: `candidate-${index + 1}`, title: article.title,
+  rssUrl: `${article.rssUrl}-${index}`, publishedAt: article.publishedAt,
+}));
+const selection = {
+  getNewsCandidates: async () => candidates,
+  selectNews: async () => candidates.map(candidate => candidate.id),
+};
 
 test('記事本文を抽出し、ナビゲーションだけ・有料記事は拒否する', () => {
   const extracted = extractBody(`<html><head><title>食堂の定食</title></head><body><nav>広告メニュー</nav><article><h1>食堂の定食</h1>${Array.from({ length: 5 }, () => `<p>${paragraph}</p>`).join('')}</article></body></html>`, article.url);
@@ -35,6 +44,71 @@ test('感想・記事タイトル・URLの順で組み立て、根拠と全体�
   assert.equal(normalizeUrl('https://example.com/article?id=2&utm_source=rss#top'), 'https://example.com/article?id=2');
 });
 
+test('宣伝除外の結果は候補の入力順に扱い、不明・重複IDや形式不正を拒否する', () => {
+  assert.deepEqual(validateSelection('{"selectedIds":["candidate-3","candidate-1"]}', candidates), ['candidate-1', 'candidate-3']);
+  assert.deepEqual(validateSelection('{"selectedIds":[]}', candidates), []);
+  for (const selectedIds of [['unknown'], ['https://example.com'], [1], ['candidate-1', 'candidate-1'], null]) {
+    assert.throws(() => validateSelection(JSON.stringify({ selectedIds }), candidates), /候補ID/);
+  }
+});
+
+test('全候補が宣伝で除外された場合は本文取得・生成を行わない', async () => {
+  const state = new State(':memory:');
+  try {
+    await assert.rejects(createNews({ news: {}, ai: {} } as Config, state, {
+      ...selection, selectNews: async () => [],
+      getNews: async () => { assert.fail('本文取得しない'); },
+      generate: async () => { assert.fail('感想を生成しない'); },
+    }), /候補がありません/);
+  } finally { state.close(); }
+});
+
+test('宣伝除外後の最初の候補から感想を生成し、次の候補は処理しない', async () => {
+  const state = new State(':memory:');
+  let path: string | undefined;
+  const visited: string[] = [];
+  try {
+    const result = await createNews({ news: {}, ai: {} } as Config, state, {
+      ...selection, selectNews: async () => ['candidate-3', 'candidate-1'],
+      getNews: async candidate => { visited.push(candidate.id); return { ...article, rssUrl: candidate.rssUrl }; },
+      generate: async selected => validateDraft(reply, selected),
+    });
+    path = result.path;
+    assert.deepEqual(visited, ['candidate-1']);
+    assert.equal(result.article.rssUrl, candidates[0].rssUrl);
+    assert.equal(state.hasPosted(article.url), false);
+  } finally { state.close(); if (path) await rm(path, { force: true }); }
+});
+
+test('選定CLIへID・タイトルだけを渡し、キャラクター設定を渡さない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'select-test-'));
+  try {
+    const command = join(dir, 'fake-agy.cjs');
+    await writeFile(command, `#!/usr/bin/env node\nconst assert=require('node:assert/strict');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const prompt=JSON.parse(input).message.content;assert.ok(!prompt.includes('しゃとたん'));assert.ok(!prompt.includes('news.google.com'));const data=JSON.parse(prompt.split('## 候補データ')[1].trim());assert.deepEqual(data,${JSON.stringify(candidates.map(({ id, title }) => ({ id, title })))});console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:{selectedIds:['candidate-2']}}}));});`, { mode: 0o700 });
+    assert.deepEqual(await selectNews(candidates, { provider: 'antigravity', command, timeoutSeconds: 5 }), ['candidate-2']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('RSS候補は期間内・未投稿の重複しない最大10件を集める', async () => {
+  const state = new State(':memory:');
+  const server = createServer((_request, response) => {
+    const item = (id: string, date = new Date().toUTCString()) => `<item><title>記事${id}</title><link>https://example.com/${id}</link><pubDate>${date}</pubDate><description>&lt;p&gt;記事の説明&lt;/p&gt;</description><source url="https://example.com/">テスト新聞</source></item>`;
+    response.end(`<rss version="2.0"><channel><title>候補テスト</title><link>https://example.com/</link><description>テスト</description>${Array.from({ length: 15 }, (_, index) => item(String(index))).join('')}${item('0')}${item('posted')}${item('old', 'Mon, 01 Jan 2024 00:00:00 GMT')}${item('future', new Date(Date.now() + 3_600_000).toUTCString())}</channel></rss>`);
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    state.savePosted(['https://example.com/posted'], 'https://x.com/i/status/test');
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const result = await getNewsCandidates({ rss: [base], maxAgeHours: 72 }, state);
+    assert.equal(result.length, 10);
+    assert.equal(new Set(result.map(candidate => candidate.rssUrl)).size, 10);
+    for (const candidate of result) {
+      assert.match(candidate.rssUrl, /^https:\/\/example.com\/\d+$/);
+      assert.ok(candidate.title.startsWith('記事'));
+    }
+  } finally { state.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
 test('CLIへ本文をstdinで渡して最終出力を取得し、失敗・タイムアウトも検出する', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ai-test-'));
   const command = join(dir, 'fake-cli.cjs');
@@ -42,7 +116,7 @@ test('CLIへ本文をstdinで渡して最終出力を取得し、失敗・タイ
     await writeFile(command, `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(!input.includes(${JSON.stringify(paragraph)}))process.exit(2);fs.writeFileSync(process.argv[process.argv.indexOf('-o')+1],${JSON.stringify(reply)});});`, { mode: 0o700 });
     const config: Config['ai'] = { provider: 'codex', command, timeoutSeconds: 5 };
     assert.ok((await generate(article, config)).includes(article.url));
-    await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const event=JSON.parse(input);if(event.event!=='user'||!event.message.content.includes(${JSON.stringify(paragraph)}))process.exit(2);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
+    await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const event=JSON.parse(input);if(event.event!=='user'||!event.message.content.includes(${JSON.stringify(paragraph)})||event.message.content.includes('宣伝'))process.exit(2);const schema=JSON.parse(process.argv[process.argv.indexOf('--json-schema')+1]);if(schema.required.join(',')!=='comment,evidence')process.exit(3);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
     assert.ok((await generate(article, { ...config, provider: 'antigravity' })).includes(article.url));
     await writeFile(command, `#!/usr/bin/env node\nconsole.log(JSON.stringify({event:'result',result:{status:'ERROR',response:''}}));`, { mode: 0o700 });
     await assert.rejects(generate(article, { ...config, provider: 'antigravity' }), /正常な生成結果/);
@@ -58,7 +132,7 @@ test('生成結果を保存しても投稿済みにしない。投稿成功時�
   let draftPath: string | undefined;
   try {
     const config = { ai: { provider: 'codex', timeoutSeconds: 5 }, news: { rss: [article.rssUrl], maxAgeHours: 72 } } as Config;
-    const draft = await createNews(config, state, { getNews: async () => article, generate: async () => validateDraft(reply, article) });
+    const draft = await createNews(config, state, { ...selection, getNews: async () => article, generate: async () => validateDraft(reply, article) });
     draftPath = draft.path;
     assert.equal(JSON.parse(await readFile(draft.path, 'utf8')).article.body, article.body);
     assert.equal(state.hasPosted(article.url), false);
@@ -76,7 +150,8 @@ test('本文取得・生成の失敗後は別の記事を選び、未投稿の�
   try {
     const config = { news: {}, ai: {} } as Config;
     const result = await createNews(config, state, {
-      getNews: async (_config, _state, excluded) => {
+      ...selection,
+      getNews: async (_candidate, _state, excluded) => {
         calls++;
         if (calls === 1) throw new Error('本文取得失敗');
         if (calls === 2) return article;
@@ -101,9 +176,10 @@ test('ニュース作成の再試行は5回で止まる', async () => {
   let calls = 0;
   try {
     await assert.rejects(createNews({ news: {}, ai: {} } as Config, state, {
+      ...selection,
       getNews: async () => { calls++; throw new Error('取得失敗'); },
       generate: async () => { assert.fail('記事がないので生成しない'); },
-    }), /5回/);
+    }), /5件/);
     assert.equal(calls, 5);
   } finally { state.close(); }
 });
@@ -111,21 +187,22 @@ test('ニュース作成の再試行は5回で止まる', async () => {
 test('--news はRSS・本文取得・CLI生成まで実行し、mode: post でも送信しない', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'news-cli-test-'));
   const html = `<html><head><title>食堂の新しい定食</title></head><body><article><h1>食堂の新しい定食</h1>${Array.from({ length: 5 }, () => `<p>${paragraph}</p>`).join('')}</article></body></html>`;
+  let promotionalReads = 0;
   const server = createServer((request, response) => {
     if (request.url === '/rss') {
       const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
       response.setHeader('Content-Type', 'application/rss+xml');
-      response.end(`<rss version="2.0"><channel><title>テストRSS</title><link>${base}</link><description>テスト</description><item><title>食堂の定食</title><link>${base}/article</link><pubDate>${new Date().toUTCString()}</pubDate></item><item><title>古い記事</title><link>${base}/old</link><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item></channel></rss>`);
+      response.end(`<rss version="2.0"><channel><title>テストRSS</title><link>${base}</link><description>テスト</description><item><title>食堂の定食</title><link>${base}/article</link><pubDate>${new Date().toUTCString()}</pubDate></item><item><title>プレスリリース 婚活イベント参加募集</title><link>${base}/promotion</link><pubDate>${new Date().toUTCString()}</pubDate></item><item><title>古い記事</title><link>${base}/old</link><pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate></item></channel></rss>`);
     } else if (request.url === '/article') {
       response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(html);
-    } else { response.statusCode = 404; response.end('not found'); }
+    } else { if (request.url === '/promotion') promotionalReads++; response.statusCode = 404; response.end('not found'); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
     // RSS config uses HTTPS in production. A local HTTP fixture is reached through an injected fetch shim.
     const command = join(dir, 'fake-agy.cjs');
-    await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const e=JSON.parse(input);if(!e.message.content.includes(${JSON.stringify(paragraph)}))process.exit(2);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
+    await writeFile(command, `#!/usr/bin/env node\nlet input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const e=JSON.parse(input);const prompt=e.message.content;if(prompt.includes('## 候補データ')){const candidates=JSON.parse(prompt.split('## 候補データ')[1].trim());const selectedIds=candidates.filter(candidate=>candidate.title==='食堂の定食').map(candidate=>candidate.id);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:{selectedIds}}}));return;}if(!prompt.includes(${JSON.stringify(paragraph)}))process.exit(2);console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',structured_output:JSON.parse(${JSON.stringify(reply)})}}));});`, { mode: 0o700 });
     const config: Config = { timezone: 'Asia/Tokyo', mode: 'post', ai: { provider: 'antigravity', command, timeoutSeconds: 5 }, news: { rss: ['https://fixture.invalid/rss'], maxAgeHours: 72 }, schedule: { news: [] } };
     const configPath = join(dir, 'config.yaml');
     await writeFile(configPath, stringify(config));
@@ -139,6 +216,7 @@ test('--news はRSS・本文取得・CLI生成まで実行し、mode: post で�
     });
     assert.ok(output.includes(`${base}/article`));
     assert.ok(output.includes('届く野菜で献立が変わる'));
+    assert.equal(promotionalReads, 0);
     const state = new State(join(dir, 'bot.sqlite'));
     try { assert.equal(state.hasPosted(`${base}/article`), false); assert.deepEqual(state.plans(new Date().toISOString().slice(0, 10)), []); }
     finally { state.close(); }

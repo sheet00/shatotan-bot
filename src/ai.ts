@@ -14,6 +14,37 @@ export interface Article {
   body: string;
 }
 
+export interface NewsCandidate {
+  id: string;
+  title: string;
+  rssUrl: string;
+  publishedAt: string;
+}
+
+export function validateSelection(raw: string, candidates: NewsCandidate[]): string[] {
+  const parsed = JSON.parse(raw.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim());
+  if (!Array.isArray(parsed.selectedIds)
+    || parsed.selectedIds.some((id: unknown) => typeof id !== "string" || !candidates.some(candidate => candidate.id === id))
+    || new Set(parsed.selectedIds).size !== parsed.selectedIds.length) {
+    throw new Error("記事選定の候補IDが不正です。");
+  }
+  return candidates.filter(candidate => parsed.selectedIds.includes(candidate.id)).map(candidate => candidate.id);
+}
+
+export async function selectNews(candidates: NewsCandidate[], config: Config["ai"]): Promise<string[]> {
+  const task = await readFile(new URL("./prompts/select-news.md", import.meta.url), "utf8");
+  // URLs remain under BOT control; only candidate IDs are accepted in the response.
+  const data = candidates.map(({ id, title }) => ({ id, title }));
+  const prompt = task.replace("{{candidates}}", () => JSON.stringify(data));
+  const schema = {
+    type: "object",
+    properties: { selectedIds: { type: "array", items: { type: "string", enum: candidates.map(candidate => candidate.id) }, uniqueItems: true } },
+    required: ["selectedIds"],
+    additionalProperties: false,
+  };
+  return validateSelection(await runAiCli(prompt, schema, config), candidates);
+}
+
 export interface WeatherInfo {
   url: string;
   comment: string;

@@ -7,6 +7,7 @@
     "test": "tsx --test tests/news.test.ts tests/scheduler.test.ts tests/weather.test.ts tests/draft.test.ts",
     "login": "tsx login.ts",
     "post:test": "tsx tests/post-test.ts",
+    "post:news:test": "tsx tests/news-post-test.ts",
     "check": "tsc --noEmit",
     "test:log": "tsx tests/pw-log.test.ts",
     "smoke": "tsx tests/smoke.ts"
